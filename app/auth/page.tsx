@@ -1,0 +1,1 @@
+import {LoginForm} from '@/components/auth';export default function Auth(){return <div className="container authpage"><LoginForm/></div>}

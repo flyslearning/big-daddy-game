@@ -1,0 +1,1 @@
+import {Games} from '@/components/games';export default function Casino(){return <div className="container page"><div className="eyebrow">GAME LOBBY</div><h1>Casino collection</h1><p className="muted">Explore games by category. Launch requires your approved provider integration.</p><Games/></div>}
