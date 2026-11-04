@@ -19,14 +19,17 @@ export function useAuth() {
 
     let mounted = true;
 
-    sb.auth.getUser().then(({ data }) => {
-      if (mounted) {
-        setUser(data.user);
-        setReady(true);
-      }
-    }).catch(() => {
-      if (mounted) setReady(true);
-    });
+    sb.auth
+      .getUser()
+      .then(({ data }) => {
+        if (mounted) {
+          setUser(data.user);
+          setReady(true);
+        }
+      })
+      .catch(() => {
+        if (mounted) setReady(true);
+      });
 
     const {
       data: { subscription },
@@ -45,22 +48,23 @@ export function useAuth() {
   return { user, ready };
 }
 
-type ToastType = "error" | "success";
-
-type ToastState = {
-  type: ToastType;
+type Toast = {
+  type: "error" | "success";
   title: string;
   message: string;
 } | null;
 
 export function LoginForm() {
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [mode, setMode] = useState<"login" | "signup">(
+    "login"
+  );
+
+  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState<ToastState>(null);
+  const [toast, setToast] = useState<Toast>(null);
 
-  // Automatically dismiss popup after 5 seconds
   useEffect(() => {
     if (!toast) return;
 
@@ -71,31 +75,44 @@ export function LoginForm() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const showError = (message: string) => {
+  function showError(message: string) {
     setToast({
       type: "error",
       title: "Access Denied",
       message,
     });
-  };
+  }
 
-  const showSuccess = (message: string) => {
+  function showSuccess(message: string) {
     setToast({
       type: "success",
       title: "Success",
       message,
     });
-  };
+  }
 
-  async function submit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  async function submit(
+    event: React.FormEvent<HTMLFormElement>
+  ) {
+    event.preventDefault();
 
     if (busy) return;
 
     const sb = supabase();
 
     if (!sb) {
-      showError("The Server Has Been Blocked.");
+      showError(
+        "The Server Has Been Blocked."
+      );
+      return;
+    }
+
+    const cleanUsername = username.trim().toLowerCase();
+
+    if (!/^[a-z0-9_]{3,24}$/.test(cleanUsername)) {
+      showError(
+        "Username must contain 3–24 letters, numbers or underscores."
+      );
       return;
     }
 
@@ -103,37 +120,76 @@ export function LoginForm() {
     setToast(null);
 
     try {
-      const result =
-        mode === "signup"
-          ? await sb.auth.signUp({
-              email: email.trim(),
-              password,
-            })
-          : await sb.auth.signInWithPassword({
-              email: email.trim(),
-              password,
-            });
+      if (mode === "signup") {
+        const { data, error } = await sb.auth.signUp({
+          email: email.trim().toLowerCase(),
+          password,
+          options: {
+            data: {
+              username: cleanUsername,
+            },
+          },
+        });
 
-      if (result.error) {
-        showError(result.error.message);
+        if (error) {
+          showError(error.message);
+          return;
+        }
+
+        if (!data.session) {
+          showSuccess(
+            "Account request submitted. Check your email to verify your account."
+          );
+          return;
+        }
+
+        window.location.assign("/account");
         return;
       }
 
-      if (mode === "signup" && !result.data.session) {
-        showSuccess(
-          "Please check your email to verify your account."
+      // Secure username/password login.
+      // Browser never receives another user's email.
+      const response = await fetch("/api/auth/username-login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        cache: "no-store",
+        body: JSON.stringify({
+          username: cleanUsername,
+          password,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (
+        !response.ok ||
+        !result.access_token ||
+        !result.refresh_token
+      ) {
+        showError(
+          result.error || "Invalid username or password."
         );
         return;
       }
 
-      showSuccess("Authentication successful. Redirecting...");
+      const { error } = await sb.auth.setSession({
+        access_token: result.access_token,
+        refresh_token: result.refresh_token,
+      });
+
+      if (error) {
+        showError("Unable to establish your session.");
+        return;
+      }
+
+      showSuccess("Login successful.");
 
       window.location.assign("/account");
-    } catch (error) {
+    } catch {
       showError(
-        error instanceof Error
-          ? error.message
-          : "Unable to connect to the server. Please try again."
+        "Unable to connect to the authentication server."
       );
     } finally {
       setBusy(false);
@@ -142,13 +198,14 @@ export function LoginForm() {
 
   function switchMode() {
     setMode(mode === "login" ? "signup" : "login");
-    setToast(null);
+    setUsername("");
+    setEmail("");
     setPassword("");
+    setToast(null);
   }
 
   return (
     <>
-      {/* ERROR / SUCCESS POPUP */}
       {toast && (
         <div
           className={`bdg-toast ${
@@ -157,7 +214,6 @@ export function LoginForm() {
               : "bdg-toast-success"
           }`}
           role={toast.type === "error" ? "alert" : "status"}
-          aria-live={toast.type === "error" ? "assertive" : "polite"}
         >
           <div className="bdg-toast-symbol">
             {toast.type === "error" ? "!" : "✓"}
@@ -171,8 +227,8 @@ export function LoginForm() {
           <button
             type="button"
             className="bdg-toast-close"
-            onClick={() => setToast(null)}
             aria-label="Close notification"
+            onClick={() => setToast(null)}
           >
             ×
           </button>
@@ -181,7 +237,6 @@ export function LoginForm() {
         </div>
       )}
 
-      {/* LOGIN / SIGNUP FORM */}
       <form className="authbox" onSubmit={submit}>
         <h1>
           {mode === "login"
@@ -190,34 +245,55 @@ export function LoginForm() {
         </h1>
 
         <p className="muted">
-          Big Daddy Game Member Access
+          BIG DADDY GAME — MEMBER ACCESS
         </p>
 
         <label>
-          Email Address
+          Username
           <input
-            type="email"
+            type="text"
             required
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
+            minLength={3}
+            maxLength={24}
+            pattern="[A-Za-z0-9_]{3,24}"
+            autoComplete="username"
+            value={username}
+            onChange={(e) =>
+              setUsername(e.target.value)
+            }
+            placeholder="Enter your username"
           />
         </label>
+
+        {mode === "signup" && (
+          <label>
+            Email Address
+            <input
+              type="email"
+              required
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Email for verification"
+            />
+          </label>
+        )}
 
         <label>
           Password
           <input
             type="password"
-            minLength={6}
             required
+            minLength={8}
             autoComplete={
               mode === "login"
                 ? "current-password"
                 : "new-password"
             }
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) =>
+              setPassword(e.target.value)
+            }
             placeholder="Enter your password"
           />
         </label>
@@ -228,7 +304,7 @@ export function LoginForm() {
           disabled={busy}
         >
           {busy
-            ? "Please Wait..."
+            ? "PLEASE WAIT..."
             : mode === "login"
               ? "LOG IN"
               : "CREATE ACCOUNT"}
@@ -242,8 +318,8 @@ export function LoginForm() {
           <button
             className="textbutton"
             type="button"
-            onClick={switchMode}
             disabled={busy}
+            onClick={switchMode}
           >
             {mode === "login"
               ? "Create Account"
